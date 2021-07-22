@@ -71,7 +71,8 @@ def main():
     sfWebUiConfig = {
         'host': '127.0.0.1',
         'port': 5001,
-        'root': '/'
+        'root': '/',
+        'cors_origins': [],
     }
 
     # 'Global' configuration options
@@ -94,7 +95,6 @@ def main():
         '_socks3port': '',
         '_socks4user': '',
         '_socks5pwd': '',
-        '_torctlport': 9051
     }
 
     sfOptdescs = {
@@ -110,7 +110,6 @@ def main():
         '_socks3port': 'SOCKS Server TCP Port. Usually 1080 for 4/5, 8080 for HTTP and 9050 for TOR.',
         '_socks4user': 'SOCKS Username. Valid only for SOCKS4 and SOCKS5 servers.',
         '_socks5pwd': "SOCKS Password. Valid only for SOCKS5 servers.",
-        '_torctlport': "The port TOR is taking control commands on. This is necessary for SpiderFoot to tell TOR to re-circuit when it suspects anonymity is compromised.",
         '_modulesenabled': "Modules enabled for the scan."  # This is a hack to get a description for an option not actually available.
     }
 
@@ -285,7 +284,7 @@ def start_scan(sfConfig, sfModules, args):
         target = f"\"{target}\""
     if "." not in target and not target.startswith("+") and '"' not in target:
         target = f"\"{target}\""
-    targetType = SpiderFootHelpers.targetType(target)
+    targetType = SpiderFootHelpers.targetTypeFromString(target)
 
     if not targetType:
         log.error(f"Could not determine target type. Invalid target: {target}")
@@ -421,7 +420,7 @@ def start_scan(sfConfig, sfModules, args):
 
     # Start running a new scan
     scanName = target
-    scanId = sf.genScanInstanceId()
+    scanId = SpiderFootHelpers.genScanInstanceId()
     try:
         p = mp.Process(target=SpiderFootScanner, args=(scanName, scanId, target, targetType, modlist, cfg))
         p.daemon = True
@@ -457,10 +456,7 @@ def start_web_server(sfWebUiConfig, sfConfig):
     web_host = sfWebUiConfig.get('host', '127.0.0.1')
     web_port = sfWebUiConfig.get('port', 5001)
     web_root = sfWebUiConfig.get('root', '/')
-
-    # Place your whitelisted CORS origins here
-    # Example: cors_origins = ['http://example.com']
-    cors_origins = []
+    cors_origins = sfWebUiConfig.get('cors_origins', [])
 
     cherrypy.config.update({
         'log.screen': False,
@@ -469,9 +465,6 @@ def start_web_server(sfWebUiConfig, sfConfig):
     })
 
     log.info(f"Starting web server at {web_host}:{web_port} ...")
-
-    # Disable auto-reloading of content
-    cherrypy.engine.autoreload.unsubscribe()
 
     sf = SpiderFoot(sfConfig)
 
@@ -484,7 +477,7 @@ def start_web_server(sfWebUiConfig, sfConfig):
         '/static': {
             'tools.staticdir.on': True,
             'tools.staticdir.dir': 'static',
-            'tools.staticdir.root': sf.myPath()
+            'tools.staticdir.root': f"{sf.myPath()}/spiderfoot"
         }
     }
 
@@ -550,17 +543,14 @@ def start_web_server(sfWebUiConfig, sfConfig):
 
     if using_ssl:
         url = "https://"
-        cors_origins.append(f"https://{web_host}:{web_port}")
     else:
         url = "http://"
-        cors_origins.append(f"http://{web_host}:{web_port}")
 
     if web_host == "0.0.0.0":  # nosec
-        url = f"{url}<IP of this host>"
+        url = f"{url}127.0.0.1:{web_port}"
     else:
-        url = f"{url}{web_host}"
-
-    url = f"{url}:{web_port}{web_root}"
+        url = f"{url}{web_host}:{web_port}{web_root}"
+        cors_origins.append(url)
 
     cherrypy_cors.install()
     cherrypy.config.update({
@@ -575,6 +565,9 @@ def start_web_server(sfWebUiConfig, sfConfig):
     print(f" browse to {url}")
     print("*************************************************************")
     print("")
+
+    # Disable auto-reloading of content
+    cherrypy.engine.autoreload.unsubscribe()
 
     cherrypy.quickstart(SpiderFootWebUi(sfWebUiConfig, sfConfig), script_name=web_root, config=conf)
 

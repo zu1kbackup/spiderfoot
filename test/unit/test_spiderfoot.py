@@ -74,15 +74,6 @@ class TestSpiderFoot(unittest.TestCase):
         sf.socksProxy = 'new socket'
         self.assertEqual('new socket', sf.socksProxy)
 
-    def test_refresh_tor_ident_should_return_none(self):
-        """
-        Test refreshTorIdent(self)
-        """
-        sf = SpiderFoot(self.default_options)
-
-        res = sf.refreshTorIdent()
-        self.assertEqual(None, res)
-
     def test_optValueToData_should_return_data_as_string(self):
         """
         Test optValueToData(self, val)
@@ -105,15 +96,6 @@ class TestSpiderFoot(unittest.TestCase):
             with self.subTest(invalid_type=invalid_type):
                 opt_data = sf.optValueToData(invalid_type)
                 self.assertEqual(opt_data, None)
-
-    def test_genScanInstanceId_should_return_a_string(self):
-        """
-        Test genScanInstanceId(self)
-        """
-        sf = SpiderFoot(dict())
-
-        scan_instance_id = sf.genScanInstanceId()
-        self.assertIsInstance(scan_instance_id, str)
 
     def test_dblog_invalid_dbh_should_raise(self):
         """
@@ -850,8 +832,10 @@ class TestSpiderFoot(unittest.TestCase):
         addrs = sf.resolveHost6('one.one.one.one')
         self.assertIsInstance(addrs, list)
         self.assertTrue(addrs)
-        self.assertIn('2606:4700:4700::1001', addrs)
-        self.assertIn('2606:4700:4700::1111', addrs)
+        # TODO: Re-enable this once GitHub runners support IPv6
+        # https://github.com/actions/virtual-environments/issues/668
+        # self.assertIn('2606:4700:4700::1001', addrs)
+        # self.assertIn('2606:4700:4700::1111', addrs)
 
         addrs = sf.resolveHost6(None)
         self.assertFalse(addrs)
@@ -917,26 +901,6 @@ class TestSpiderFoot(unittest.TestCase):
 
         sf.safeSSLSocket(None, None, None, None)
         self.assertEqual('TBD', 'TBD')
-
-    def test_parse_robots_txt_should_return_list(self):
-        """
-        Test parseRobotsTxt(self, robotsTxtData)
-        """
-        sf = SpiderFoot(self.default_options)
-
-        invalid_types = [None, "", list(), dict()]
-        for invalid_type in invalid_types:
-            with self.subTest(invalid_type=invalid_type):
-                robots_txt = sf.parseRobotsTxt(invalid_type)
-                self.assertIsInstance(robots_txt, list)
-
-        robots_txt = sf.parseRobotsTxt("disallow:")
-        self.assertIsInstance(robots_txt, list)
-        self.assertFalse(robots_txt)
-
-        robots_txt = sf.parseRobotsTxt("disallow: /disallowed/path\n")
-        self.assertIsInstance(robots_txt, list)
-        self.assertIn("/disallowed/path", robots_txt)
 
     def test_parseHashes_should_return_a_list(self):
         """

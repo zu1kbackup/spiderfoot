@@ -27,7 +27,6 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from copy import deepcopy
 from datetime import datetime
 
@@ -40,8 +39,6 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup, SoupStrainer
 from publicsuffixlist import PublicSuffixList
-from stem import Signal
-from stem.control import Controller
 
 # For hiding the SSL warnings coming from the requests lib
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # noqa: DUO131
@@ -146,24 +143,6 @@ class SpiderFoot:
         """
         self._socksProxy = socksProxy
 
-    def refreshTorIdent(self):
-        """Tell TOR to re-circuit."""
-
-        if self.opts['_socks1type'] != "TOR":
-            return
-
-        try:
-            self.info("Re-circuiting TOR...")
-            with Controller.from_port(address=self.opts['_socks2addr'],
-                                      port=self.opts['_torctlport']) as controller:
-                controller.authenticate()
-                controller.signal(Signal.NEWNYM)
-                time.sleep(10)
-        except BaseException as e:
-            self.fatal(f"Unable to re-circuit TOR: {e}")
-
-        return
-
     def optValueToData(self, val):
         """Supplied an option value, return the data based on what the
         value is. If val is a URL, you'll get back the fetched content,
@@ -204,15 +183,6 @@ class SpiderFoot:
                 return None
 
         return val
-
-    def genScanInstanceId(self):
-        """Generate an globally unique ID for this scan.
-
-        Returns:
-            str: scan instance unique ID
-        """
-
-        return str(uuid.uuid4()).split("-")[0].upper()
 
     def _dblog(self, level, message, component=None):
         """Log a scan event.
@@ -386,8 +356,9 @@ class SpiderFoot:
         Returns:
             str: SpiderFoot cache file system path
         """
-
-        path = self.myPath() + '/cache'
+        path = os.environ.get('SPIDERFOOT_CACHE')
+        if not path:
+            path = self.myPath() + '/cache'
         if not os.path.isdir(path):
             os.mkdir(path)
         return path
@@ -1160,7 +1131,7 @@ class SpiderFoot:
 
         for d in dicts:
             try:
-                with io.open(self.myPath() + "/dicts/ispell/" + d + ".dict", 'r', encoding='utf8', errors='ignore') as wdct:
+                with io.open(f"{self.myPath()}/spiderfoot/dicts/ispell/{d}.dict", 'r', encoding='utf8', errors='ignore') as wdct:
                     dlines = wdct.readlines()
             except BaseException as e:
                 self.debug(f"Could not read dictionary: {e}")
@@ -1185,7 +1156,7 @@ class SpiderFoot:
 
         for d in dicts:
             try:
-                wdct = open(self.myPath() + "/dicts/ispell/" + d + ".dict", 'r')
+                wdct = open(f"{self.myPath()}/spiderfoot/dicts/ispell/{d}.dict", 'r')
                 dlines = wdct.readlines()
                 wdct.close()
             except BaseException as e:
@@ -2221,6 +2192,9 @@ class SpiderFoot:
 
         Returns:
             bool: should the configured proxy be used?
+
+        Todo:
+            Allow using TOR only for .onion addresses
         """
         host = self.urlFQDN(url).lower()
 
@@ -2237,7 +2211,7 @@ class SpiderFoot:
         if not proxy_port:
             return False
 
-        # Never proxy requests to the proxy
+        # Never proxy requests to the proxy host
         if host == proxy_host.lower():
             return False
 
@@ -2284,7 +2258,7 @@ class SpiderFoot:
             timeout (int): timeout
             useragent (str): user agent header
             headers (str): headers
-            noLog (bool): do not log
+            noLog (bool): do not log request
             postData (str): HTTP POST data
             dontMangle (bool): do not mangle
             sizeLimit (int): size threshold
@@ -2318,16 +2292,14 @@ class SpiderFoot:
             self.debug(f"Invalid URL scheme for URL: {url}")
             return None
 
+        request_log = []
+
         proxies = dict()
         if self.useProxyForUrl(url):
-            proxy_url = f"socks5h://{self.opts['_socks2addr']}:{self.opts['_socks3port']}"
-            self.debug(f"Using proxy {proxy_url} for {url}")
             proxies = {
-                'http': proxy_url,
-                'https': proxy_url
+                'http': self.socksProxy,
+                'https': self.socksProxy,
             }
-        else:
-            self.debug(f"Not using proxy for {url}")
 
         header = dict()
         btime = time.time()
@@ -2342,9 +2314,14 @@ class SpiderFoot:
             for k in list(headers.keys()):
                 header[k] = str(headers[k])
 
+        request_log.append(f"proxy={self.socksProxy}")
+        request_log.append(f"user-agent={header['User-Agent']}")
+        request_log.append(f"timeout={timeout}")
+        request_log.append(f"cookies={cookies}")
+
         if sizeLimit or headOnly:
             if not noLog:
-                self.info(f"Fetching (HEAD only): {self.removeUrlCreds(url)} [user-agent: {header['User-Agent']}] [timeout: {timeout}]")
+                self.info(f"Fetching (HEAD): {self.removeUrlCreds(url)} ({', '.join(request_log)})")
 
             try:
                 hdr = self.getSession().head(
@@ -2381,7 +2358,7 @@ class SpiderFoot:
 
             if result['realurl'] != url:
                 if not noLog:
-                    self.info(f"Fetching (HEAD only): {self.removeUrlCreds(result['realurl'])} [user-agent: {header['User-Agent']}] [timeout: {timeout}]")
+                    self.info(f"Fetching (HEAD): {self.removeUrlCreds(result['realurl'])} ({', '.join(request_log)})")
 
                 try:
                     hdr = self.getSession().head(
@@ -2408,14 +2385,10 @@ class SpiderFoot:
 
                     return result
 
-        if not noLog:
-            if cookies:
-                self.info(f"Fetching (incl. cookies): {self.removeUrlCreds(url)} [user-agent: {header['User-Agent']}] [timeout: {timeout}]")
-            else:
-                self.info(f"Fetching: {self.removeUrlCreds(url)} [user-agent: {header['User-Agent']}] [timeout: {timeout}]")
-
         try:
             if postData:
+                if not noLog:
+                    self.info(f"Fetching (POST): {self.removeUrlCreds(url)} ({', '.join(request_log)})")
                 res = self.getSession().post(
                     url,
                     data=postData,
@@ -2427,6 +2400,8 @@ class SpiderFoot:
                     verify=verify
                 )
             else:
+                if not noLog:
+                    self.info(f"Fetching (GET): {self.removeUrlCreds(url)} ({', '.join(request_log)})")
                 res = self.getSession().get(
                     url,
                     headers=header,
